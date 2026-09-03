@@ -138,12 +138,6 @@ Yerine `NtQuerySystemInformation` tek çağrısıyla bütün process'lerin adın
 
 **Takılan oturumu buluyor.** `WTSQuerySessionInformation` takılı bir oturumda bloke olan çağrıdır — Task Manager'ı donduran şey tam olarak budur. Araç her oturumun sorgu süresini ayrı ölçtüğü için, enumerate takıldığında onunla birlikte donmuyor; **hangi oturum ID'sinin sorumlu olduğunu söylüyor.**
 
-**Çalıştırma:**
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\RdpSesinMenicir.ps1
-```
-
 **Çalıştırma:** `Run.cmd` dosyasına çift tıkla, ya da sağ tık → Yönetici olarak çalıştır. Komut satırını tercih edersen:
 
 ```powershell
