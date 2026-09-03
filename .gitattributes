@@ -1,0 +1,12 @@
+# PowerShell must stay CRLF on Windows
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.psd1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+*.md    text eol=lf
+LICENSE text eol=lf
+
+*.png   binary
+*.ico   binary

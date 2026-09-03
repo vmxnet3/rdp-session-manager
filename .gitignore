@@ -1,0 +1,16 @@
+# Runtime output
+*.log
+settings.json
+
+# Editor / OS
+*.bak
+*.swp
+Thumbs.db
+desktop.ini
+.vs/
+.vscode/
+
+# macOS
+.DS_Store
+._*
+__MACOSX/
