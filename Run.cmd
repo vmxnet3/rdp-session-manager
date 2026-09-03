@@ -14,10 +14,28 @@ rem  For elevated rights: right-click this file -> Run as administrator.
 rem  (The tool also offers to restart elevated if you start it as a user.)
 rem ===========================================================================
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0RdpSesinMenicir.ps1"
+setlocal
+set "PS1=%~dp0RdpSesinMenicir.ps1"
 
-if errorlevel 1 (
+if not exist "%PS1%" (
     echo.
-    echo The tool exited with an error. Press any key to close.
-    pause >nul
+    echo RdpSesinMenicir.ps1 was not found next to this launcher.
+    echo Keep both files in the same folder.
+    echo.
+    pause
+    exit /b 1
 )
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+set "RC=%errorlevel%"
+
+if not "%RC%"=="0" (
+    echo.
+    echo The tool exited with code %RC%.
+    echo.
+    echo To see the full error message, run this in a PowerShell window:
+    echo    powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+    echo.
+    pause
+)
+endlocal

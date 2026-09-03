@@ -56,7 +56,7 @@
 $ErrorActionPreference = 'Stop'
 
 [string]$AppName    = 'rdp sesin menicir'
-[string]$AppVersion = '1.3.0'
+[string]$AppVersion = '1.3.1'
 
 [int]$EnumTimeoutSeconds = 6      # session/process enumeration timeout
 [int]$PerfTimeoutSeconds = 8      # performance counter timeout
@@ -604,7 +604,7 @@ namespace Rds {
 
         // Must match $AppVersion. .NET types cannot be unloaded from a
         // PowerShell session, so this stamp catches a stale build.
-        public const string Build = "1.3.0";
+        public const string Build = "1.3.1";
 
         [DllImport("ntdll.dll")]
         static extern int NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returned);
@@ -2255,7 +2255,6 @@ $form.Add_FormClosing({
 # ============================================================================
 Write-ActionLog 'START' "$AppName $AppVersion" $(if ($script:IsAdmin) { 'admin' } else { 'limited' })
 
-$cboAuto.SelectedIndex = 2
 Apply-Language
 
 $form.Add_Shown({

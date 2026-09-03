@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.1] - 2026-09-03
+
+### Fixed
+- The tool closed immediately on start. `$cboAuto.SelectedIndex = 2` ran
+  before `Apply-Language` had populated the combo box, so assigning an index
+  to an empty list threw a terminating error and the window never appeared.
+  The interval is now set solely by `Apply-Language`.
+- `Run.cmd` reports a non-zero exit code and prints the command to run for
+  the full error message, instead of closing silently.
+
 ## [1.3.0] - 2026-09-03
 
 First public release.
