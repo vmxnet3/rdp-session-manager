@@ -122,6 +122,12 @@ Keep the file ASCII-only. PowerShell 5.1 reads a UTF-8 file without a BOM as ANS
 
 Test in a fresh PowerShell window. Running twice in the same window is handled, but editing the C# block and re-running is not — open a new window.
 
+## Credits
+
+Written by [@vmxnet3](https://github.com/vmxnet3) with [Claude](https://claude.ai) (Anthropic) doing most of the typing.
+
+The problem came from a real 50+ user RDS host, and so did every design decision in it: which APIs cause the freeze, why session queries are timed individually, why disk latency matters more than throughput. Each build was tested in production and the bugs that came back shaped the next one. Commits carry a `Co-Authored-By` line to the same effect.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
@@ -151,3 +157,5 @@ Buradaki `-ExecutionPolicy Bypass` bir başlatma parametresi, sadece o process i
 Yönetici olarak başlatılmazsa yeniden başlatmayı teklif ediyor; reddedersen çalışmaya devam ediyor ve araç çubuğunda **sinirli yetki** yazıyor.
 
 Arayüz dili sağ üstteki `EN / TR` kutusundan değiştirilir, tercih hatırlanır.
+
+**Nasıl yazıldı:** Kodun büyük kısmı [Claude](https://claude.ai) ile yazıldı. Sorun da, çözümdeki her karar da gerçek bir terminal sunucusundan çıktı: hangi API'lerin donmaya sebep olduğu, oturum sorgularının neden tek tek süre ölçülerek yapıldığı, disk latency'sinin neden throughput'tan önemli olduğu. Her sürüm üretimde test edildi, çıkan hatalar bir sonrakini şekillendirdi.
