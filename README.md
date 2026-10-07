@@ -130,7 +130,7 @@ MIT — see [LICENSE](LICENSE).
 
 ## Türkçe
 
-Windows terminal sunucuları (RDS) için tek dosyalık oturum, process ve performans yöneticisi. Bağımlılık yok, kurulum yok, modül yok.
+Windows terminal sunucuları (RDS) için tek dosyalık oturum, process ve performans yöneticisi. Bağımlılık yok, kurulum yok, modül yok. Terminal server task manager mağdurları için yapıldı.
 
 **Neden Task Manager değil?** 40+ kullanıcılı bir terminal sunucusunda Task Manager onlarca saniye donuyor. Sebep veri miktarı değil, process başına çağrılan pahalı API'ler: `Responding`, `MainWindowTitle`, `-IncludeUserName`, `Win32_Process`, dosya yolu ve ikon okuma. Bu araç hiçbirini kullanmıyor.
 
