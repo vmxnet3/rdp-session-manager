@@ -56,7 +56,7 @@
 $ErrorActionPreference = 'Stop'
 
 [string]$AppName    = 'rdp sesin menicir'
-[string]$AppVersion = '1.3.1'
+[string]$AppVersion = '1.4.0'
 
 [int]$EnumTimeoutSeconds = 6      # session/process enumeration timeout
 [int]$PerfTimeoutSeconds = 8      # performance counter timeout
@@ -67,6 +67,24 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+# Replace the raw .NET "unhandled exception" dialog with our own message and
+# write the full stack trace to the log, so a bug can be diagnosed from the
+# log file instead of a screenshot.
+[System.Windows.Forms.Application]::add_ThreadException({
+    param($s, $e)
+    try {
+        $msg = $e.Exception.Message
+        $st  = $e.Exception.StackTrace
+        $line = "{0}`t{1}`tUNHANDLED`t{2}`t{3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),
+                $env:USERNAME, $msg, ($st -replace "`r?`n", ' | ')
+        $lp = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'RdpSesinMenicir.log' }
+              else { Join-Path $env:TEMP 'RdpSesinMenicir.log' }
+        Add-Content -LiteralPath $lp -Value $line -Encoding UTF8
+        [void][System.Windows.Forms.MessageBox]::Show(
+            ($msg + "`n`n" + $st), 'rdp sesin menicir', 'OK', 'Error')
+    } catch { }
+})
 
 # ============================================================================
 # Settings (read early - the UI language comes from here)
@@ -129,6 +147,10 @@ $script:Str = @{
         'sess.header'      = 'sessions  -  {0} sessions, {1} processes'
         'proc.header'      = 'processes  -  {0}   (session {1})   -   {2} processes'
         'proc.none'        = 'processes  -  select a session above'
+        'proc.all'         = 'processes  -  all sessions  -  {0} processes'
+        'col.sessId'       = 'sess'
+        'col.sessUser'     = 'user'
+        'menu.clearSel'    = 'Clear selection  (Ctrl+Shift+A)'
         'col.id'           = 'id'
         'col.user'         = 'user'
         'col.session'      = 'session'
@@ -211,6 +233,11 @@ $script:Str = @{
         'admin.failed'     = "Could not elevate, continuing with limited rights.`n`n{0}"
         'warn.typeTitle'   = 'Restart required'
         'warn.type'        = "A different version ({0}) of this tool is already loaded into this PowerShell session, and .NET types cannot be unloaded.`n`nPlease open a NEW PowerShell window and try again."
+        'msgdlg.title'     = 'Send notification'
+        'msgdlg.label'     = 'Message sent to {0} session(s):'
+        'msgdlg.send'      = 'Send'
+        'msgdlg.cancel'    = 'Cancel'
+        'msgdlg.empty'     = 'The message is empty.'
         'msg.notify'       = 'Your session will be closed. Please save your work.'
         'msg.notifyTitle'  = 'System notification'
         'tip.refresh'      = 'Refresh the session and process list now  (F5)'
@@ -263,6 +290,10 @@ $script:Str = @{
         'sess.header'      = 'oturumlar  -  {0} oturum, {1} process'
         'proc.header'      = 'process  -  {0}   (session {1})   -   {2} process'
         'proc.none'        = 'process  -  yukaridan bir oturum secin'
+        'proc.all'         = 'process  -  tum oturumlar  -  {0} process'
+        'col.sessId'       = 'oturum'
+        'col.sessUser'     = 'kullanici'
+        'menu.clearSel'    = 'Secimi temizle  (Ctrl+Shift+A)'
         'col.id'           = 'id'
         'col.user'         = 'kullanici'
         'col.session'      = 'oturum'
@@ -345,6 +376,11 @@ $script:Str = @{
         'admin.failed'     = "Yukseltme yapilamadi, sinirli yetkiyle devam ediliyor.`n`n{0}"
         'warn.typeTitle'   = 'Yeniden baslatma gerekli'
         'warn.type'        = "Bu PowerShell oturumuna aracin farkli bir surumu ({0}) yuklenmis ve .NET tipleri kaldirilamiyor.`n`nLutfen YENI bir PowerShell penceresi acip tekrar deneyin."
+        'msgdlg.title'     = 'Uyari gonder'
+        'msgdlg.label'     = '{0} oturuma gonderilecek mesaj:'
+        'msgdlg.send'      = 'Gonder'
+        'msgdlg.cancel'    = 'Iptal'
+        'msgdlg.empty'     = 'Mesaj bos.'
         'msg.notify'       = 'Oturumunuz kapatilacaktir, lutfen calismalarinizi kaydediniz.'
         'msg.notifyTitle'  = 'Sistem Uyarisi'
         'tip.refresh'      = 'Oturum ve process listesini simdi yenile  (F5)'
@@ -604,7 +640,7 @@ namespace Rds {
 
         // Must match $AppVersion. .NET types cannot be unloaded from a
         // PowerShell session, so this stamp catches a stale build.
-        public const string Build = "1.3.1";
+        public const string Build = "1.4.0";
 
         [DllImport("ntdll.dll")]
         static extern int NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returned);
@@ -713,7 +749,7 @@ namespace RdsUi {
 # ============================================================================
 function Hex([string]$h) { [System.Drawing.ColorTranslator]::FromHtml($h) }
 
-$T = @{
+$script:T = @{
     Bg       = Hex '#131316'
     Panel    = Hex '#16161A'
     Bar      = Hex '#0E0E11'
@@ -733,7 +769,7 @@ $T = @{
     Sel      = Hex '#123A4E'
 }
 
-$F = @{
+$script:F = @{
     Body  = New-Object System.Drawing.Font('Segoe UI', 9)
     Small = New-Object System.Drawing.Font('Segoe UI', 8)
     Head  = New-Object System.Drawing.Font('Segoe UI', 8)
@@ -741,8 +777,8 @@ $F = @{
     Mono  = New-Object System.Drawing.Font('Consolas', 9)
 }
 
-$script:ThemeThumb    = $T.Thumb
-$script:ThemeThumbHot = $T.ThumbHot
+$script:ThemeThumb    = $script:T.Thumb
+$script:ThemeThumbHot = $script:T.ThumbHot
 
 # Greyed out in the list and never terminable.
 $script:Protected = @(
@@ -945,6 +981,8 @@ $script:CpuPct     = @{}
 $script:Cores      = [Environment]::ProcessorCount
 $script:SelSession = -1
 $script:Filter     = ''
+$script:Rebuilding = $false
+$script:NotifyText = $null
 
 $script:HistCpu  = New-Object System.Collections.Generic.Queue[double]
 $script:HistRam  = New-Object System.Collections.Generic.Queue[double]
@@ -963,10 +1001,10 @@ function Push-Hist {
 function New-DarkGrid {
     $g = New-Object System.Windows.Forms.DataGridView
     $g.Dock                      = 'Fill'
-    $g.BackgroundColor           = $T.Bg
-    $g.GridColor                 = $T.Line
+    $g.BackgroundColor           = $script:T.Bg
+    $g.GridColor                 = $script:T.Line
     $g.BorderStyle               = 'None'
-    $g.Font                      = $F.Body
+    $g.Font                      = $script:F.Body
     $g.RowHeadersVisible         = $false
     $g.AllowUserToAddRows        = $false
     $g.AllowUserToDeleteRows     = $false
@@ -985,18 +1023,18 @@ function New-DarkGrid {
     $g.AutoSizeColumnsMode       = 'Fill'
     # Vertical scrolling is handled by our own thin dark scrollbar
     $g.ScrollBars                = 'None'
-    $g.ColumnHeadersDefaultCellStyle.BackColor = $T.Bar
-    $g.ColumnHeadersDefaultCellStyle.ForeColor = $T.Dim
-    $g.ColumnHeadersDefaultCellStyle.Font      = $F.Head
-    $g.ColumnHeadersDefaultCellStyle.SelectionBackColor = $T.Bar
-    $g.ColumnHeadersDefaultCellStyle.SelectionForeColor = $T.Dim
+    $g.ColumnHeadersDefaultCellStyle.BackColor = $script:T.Bar
+    $g.ColumnHeadersDefaultCellStyle.ForeColor = $script:T.Dim
+    $g.ColumnHeadersDefaultCellStyle.Font      = $script:F.Head
+    $g.ColumnHeadersDefaultCellStyle.SelectionBackColor = $script:T.Bar
+    $g.ColumnHeadersDefaultCellStyle.SelectionForeColor = $script:T.Dim
     $g.ColumnHeadersDefaultCellStyle.Padding   = New-Object System.Windows.Forms.Padding(6,0,6,0)
-    $g.DefaultCellStyle.BackColor          = $T.Bg
-    $g.DefaultCellStyle.ForeColor          = $T.Text
-    $g.DefaultCellStyle.SelectionBackColor = $T.Sel
+    $g.DefaultCellStyle.BackColor          = $script:T.Bg
+    $g.DefaultCellStyle.ForeColor          = $script:T.Text
+    $g.DefaultCellStyle.SelectionBackColor = $script:T.Sel
     $g.DefaultCellStyle.SelectionForeColor = [System.Drawing.Color]::White
     $g.DefaultCellStyle.Padding            = New-Object System.Windows.Forms.Padding(6,0,6,0)
-    $g.AlternatingRowsDefaultCellStyle.BackColor = $T.RowAlt
+    $g.AlternatingRowsDefaultCellStyle.BackColor = $script:T.RowAlt
     return $g
 }
 
@@ -1012,7 +1050,7 @@ function Add-Col {
     $c.SortMode      = 'Automatic'
     $c.DefaultCellStyle.Alignment = $Align
     if ($Format) { $c.DefaultCellStyle.Format = $Format }
-    if ($Mono)   { $c.DefaultCellStyle.Font = $F.Mono }
+    if ($Mono)   { $c.DefaultCellStyle.Font = $script:F.Mono }
     [void]$Grid.Columns.Add($c)
 }
 
@@ -1023,12 +1061,12 @@ function Add-DarkScrollbar {
 
     $wrap = New-Object System.Windows.Forms.Panel
     $wrap.Dock      = 'Fill'
-    $wrap.BackColor = $T.Bg
+    $wrap.BackColor = $script:T.Bg
 
     $bar = New-Object System.Windows.Forms.Panel
     $bar.Dock      = 'Right'
     $bar.Width     = 9
-    $bar.BackColor = $T.Bg
+    $bar.BackColor = $script:T.Bg
     $bar.Tag       = @{ Grid = $Grid; Hot = $false }
 
     $wrap.Controls.Add($Grid)
@@ -1104,10 +1142,10 @@ function New-DarkButton {
     $b.Text      = $Text
     $b.Width     = $W
     $b.Height    = 28
-    $b.Font      = $F.Body
+    $b.Font      = $script:F.Body
     $b.FlatStyle = 'Flat'
-    $b.BackColor = if ($Danger) { $T.DangerBg } else { $T.Bg }
-    $b.ForeColor = if ($Danger) { $T.Danger } elseif ($Fore) { $Fore } else { $T.Text }
+    $b.BackColor = if ($Danger) { $script:T.DangerBg } else { $script:T.Bg }
+    $b.ForeColor = if ($Danger) { $script:T.Danger } elseif ($Fore) { $Fore } else { $script:T.Text }
     $b.FlatAppearance.BorderColor = if ($Danger) { Hex '#7A2B2B' } else { Hex '#33333B' }
     $b.FlatAppearance.BorderSize  = 1
     return $b
@@ -1132,11 +1170,11 @@ function New-SectionHeader {
     $p = New-Object System.Windows.Forms.Panel
     $p.Dock      = 'Top'
     $p.Height    = 26
-    $p.BackColor = $T.Bar
-    $lbl = New-Label $Text $F.Small $T.Dim 12 5 700 16
+    $p.BackColor = $script:T.Bar
+    $lbl = New-Label $Text $script:F.Small $script:T.Dim 12 5 700 16
     $p.Controls.Add($lbl)
     $line = New-Object System.Windows.Forms.Panel
-    $line.Dock = 'Bottom'; $line.Height = 1; $line.BackColor = $T.Border
+    $line.Dock = 'Bottom'; $line.Height = 1; $line.BackColor = $script:T.Border
     $p.Controls.Add($line)
     $p.Tag = $lbl
     return $p
@@ -1144,7 +1182,7 @@ function New-SectionHeader {
 
 function New-Sep {
     $s = New-Object System.Windows.Forms.Panel
-    $s.Dock = 'Top'; $s.Height = 1; $s.BackColor = $T.Border
+    $s.Dock = 'Top'; $s.Height = 1; $s.BackColor = $script:T.Border
     return $s
 }
 
@@ -1153,7 +1191,7 @@ function New-VSep {
     $s = New-Object System.Windows.Forms.Panel
     $s.Location  = New-Object System.Drawing.Point($X, 12)
     $s.Size      = New-Object System.Drawing.Size(1, 20)
-    $s.BackColor = $T.Border
+    $s.BackColor = $script:T.Border
     return $s
 }
 
@@ -1190,9 +1228,9 @@ $form.Text          = "$AppName  $AppVersion"
 $form.Size          = New-Object System.Drawing.Size(1400, 900)
 $form.MinimumSize   = New-Object System.Drawing.Size(1100, 660)
 $form.StartPosition = 'CenterScreen'
-$form.BackColor     = $T.Bg
-$form.ForeColor     = $T.Text
-$form.Font          = $F.Body
+$form.BackColor     = $script:T.Bg
+$form.ForeColor     = $script:T.Text
+$form.Font          = $script:F.Body
 $form.KeyPreview    = $true
 try { $form.Icon = New-AppIcon } catch { }
 
@@ -1200,7 +1238,7 @@ try { $form.Icon = New-AppIcon } catch { }
 $split = New-Object System.Windows.Forms.SplitContainer
 $split.Dock          = 'Fill'
 $split.Orientation   = 'Horizontal'
-$split.BackColor     = $T.Border
+$split.BackColor     = $script:T.Border
 $split.SplitterWidth = 6
 $form.Controls.Add($split)
 
@@ -1226,6 +1264,8 @@ $split.Panel1.Controls.Add($hdrS)
 $gridP = New-DarkGrid
 Add-Col $gridP 'Pid'  ([int])      6 60  'MiddleRight' '' -Mono
 Add-Col $gridP 'Name' ([string])  24 180
+Add-Col $gridP 'Sess' ([int])      5 54  'MiddleRight' '' -Mono
+Add-Col $gridP 'SUser' ([string]) 16 140
 Add-Col $gridP 'Cpu'  ([double])   7 66  'MiddleRight' 'N1'
 Add-Col $gridP 'MB'   ([int])      8 80  'MiddleRight' 'N0'
 Add-Col $gridP 'DMB'  ([int])      7 72  'MiddleRight' '+#,0;-#,0;0'
@@ -1242,7 +1282,7 @@ $split.Panel2.Controls.Add($hdrP)
 $perf = New-Object System.Windows.Forms.Panel
 $perf.Dock      = 'Left'
 $perf.Width     = 218
-$perf.BackColor = $T.Border
+$perf.BackColor = $script:T.Border
 $form.Controls.Add($perf)
 
 $script:Tiles = @{}
@@ -1251,17 +1291,17 @@ function New-PerfTile {
     $p = New-Object System.Windows.Forms.Panel
     $p.Dock      = 'Top'
     $p.Height    = 104
-    $p.BackColor = $T.Panel
+    $p.BackColor = $script:T.Panel
 
-    $lbl = New-Label '' $F.Small $T.Dim   12 8  180 14
-    $val = New-Label '-' $F.Big   $Color   12 24 190 28
-    $sub = New-Label '' $F.Small $T.Faint 12 82 194 14
+    $lbl = New-Label '' $script:F.Small $script:T.Dim   12 8  180 14
+    $val = New-Label '-' $script:F.Big   $Color   12 24 190 28
+    $sub = New-Label '' $script:F.Small $script:T.Faint 12 82 194 14
 
     $spark = New-Object System.Windows.Forms.Panel
     $spark.Location  = New-Object System.Drawing.Point(12, 56)
     $spark.Size      = New-Object System.Drawing.Size(192, 24)
     $spark.Anchor    = 'Top,Left,Right'
-    $spark.BackColor = $T.Panel
+    $spark.BackColor = $script:T.Panel
     $spark.Tag       = @{ Queue = $Queue; Color = $Color; Max = $Max }
     $spark.Add_Paint({
         param($s, $e)
@@ -1304,18 +1344,18 @@ function New-InfoPanel {
     $p = New-Object System.Windows.Forms.Panel
     $p.Dock      = 'Top'
     $p.Height    = 132
-    $p.BackColor = $T.Panel
+    $p.BackColor = $script:T.Panel
 
-    $head = New-Label '' $F.Small $T.Dim 12 8 180 14
+    $head = New-Label '' $script:F.Small $script:T.Dim 12 8 180 14
     $p.Controls.Add($head)
     $script:Info['head'] = $head
-    $p.Controls.Add((New-Label $env:COMPUTERNAME $F.Body $T.Text 12 25 194 18))
-    $p.Controls.Add((New-Label $script:ServerIp $F.Small $T.Dim 12 44 194 16))
+    $p.Controls.Add((New-Label $env:COMPUTERNAME $script:F.Body $script:T.Text 12 25 194 18))
+    $p.Controls.Add((New-Label $script:ServerIp $script:F.Small $script:T.Dim 12 44 194 16))
 
     $y = 68
     foreach ($k in @('up','hnd','thr')) {
-        $lbl = New-Label '' $F.Small $T.Faint 12 $y 96 16
-        $val = New-Label '-' $F.Small $T.Text 108 $y 98 16 'MiddleRight'
+        $lbl = New-Label '' $script:F.Small $script:T.Faint 12 $y 96 16
+        $val = New-Label '-' $script:F.Small $script:T.Text 108 $y 98 16 'MiddleRight'
         $p.Controls.AddRange(@($lbl, $val))
         $script:Info["$k.lbl"] = $lbl
         $script:Info[$k]       = $val
@@ -1327,13 +1367,13 @@ function New-InfoPanel {
 # Dock Top stacks bottom-up: the last control added ends up on top.
 $perf.Controls.Add((New-InfoPanel))
 $perf.Controls.Add((New-Sep))
-$perf.Controls.Add((New-PerfTile 'net'  $script:HistNet  $T.Dim    10))
+$perf.Controls.Add((New-PerfTile 'net'  $script:HistNet  $script:T.Dim    10))
 $perf.Controls.Add((New-Sep))
-$perf.Controls.Add((New-PerfTile 'disk' $script:HistDisk $T.Warn   $DiskWarnMs))
+$perf.Controls.Add((New-PerfTile 'disk' $script:HistDisk $script:T.Warn   $DiskWarnMs))
 $perf.Controls.Add((New-Sep))
-$perf.Controls.Add((New-PerfTile 'ram'  $script:HistRam  $T.Dim    100))
+$perf.Controls.Add((New-PerfTile 'ram'  $script:HistRam  $script:T.Dim    100))
 $perf.Controls.Add((New-Sep))
-$perf.Controls.Add((New-PerfTile 'cpu'  $script:HistCpu  $T.Accent 100))
+$perf.Controls.Add((New-PerfTile 'cpu'  $script:HistCpu  $script:T.Accent 100))
 $perfHdr = New-SectionHeader ''
 $perf.Controls.Add($perfHdr)
 
@@ -1341,7 +1381,7 @@ $perf.Controls.Add($perfHdr)
 $kpi = New-Object System.Windows.Forms.FlowLayoutPanel
 $kpi.Dock          = 'Top'
 $kpi.Height        = 28
-$kpi.BackColor     = $T.Bar
+$kpi.BackColor     = $script:T.Bar
 $kpi.WrapContents  = $false
 $kpi.Padding       = New-Object System.Windows.Forms.Padding(12, 5, 0, 0)
 $form.Controls.Add($kpi)
@@ -1351,26 +1391,26 @@ $script:KpiLbls = @{}
 function Add-Kpi {
     param([string]$Key, $Color)
     $l = New-Object System.Windows.Forms.Label
-    $l.Font = $F.Small; $l.ForeColor = $T.Faint
+    $l.Font = $script:F.Small; $l.ForeColor = $script:T.Faint
     $l.AutoSize = $true; $l.Margin = New-Object System.Windows.Forms.Padding(0,3,5,0)
     $v = New-Object System.Windows.Forms.Label
-    $v.Text = '-'; $v.Font = $F.Body; $v.ForeColor = $Color
+    $v.Text = '-'; $v.Font = $script:F.Body; $v.ForeColor = $Color
     $v.AutoSize = $true; $v.Margin = New-Object System.Windows.Forms.Padding(0,1,22,0)
     $kpi.Controls.AddRange(@($l, $v))
     $script:KpiLbls[$Key] = $l
     $script:KpiVals[$Key] = $v
 }
-Add-Kpi 'active' $T.Ok
-Add-Kpi 'disc'   $T.Warn
-Add-Kpi 'ram'    $T.Text
-Add-Kpi 'stuck'  $T.Faint
+Add-Kpi 'active' $script:T.Ok
+Add-Kpi 'disc'   $script:T.Warn
+Add-Kpi 'ram'    $script:T.Text
+Add-Kpi 'stuck'  $script:T.Faint
 
 # --- top bar ----------------------------------------------------------------
 $top = New-Object System.Windows.Forms.Panel
-$top.Dock = 'Top'; $top.Height = 44; $top.BackColor = $T.Bar
+$top.Dock = 'Top'; $top.Height = 44; $top.BackColor = $script:T.Bar
 $form.Controls.Add($top)
 
-$btnRefresh = New-DarkButton '' 84 $T.Accent
+$btnRefresh = New-DarkButton '' 84 $script:T.Accent
 $btnRefresh.Location = New-Object System.Drawing.Point(12, 8)
 $top.Controls.Add($btnRefresh)
 
@@ -1378,10 +1418,10 @@ $cboAuto = New-Object System.Windows.Forms.ComboBox
 $cboAuto.DropDownStyle = 'DropDownList'
 $cboAuto.Width     = 116
 $cboAuto.Location  = New-Object System.Drawing.Point(104, 10)
-$cboAuto.BackColor = $T.Bg
-$cboAuto.ForeColor = $T.Text
+$cboAuto.BackColor = $script:T.Bg
+$cboAuto.ForeColor = $script:T.Text
 $cboAuto.FlatStyle = 'Flat'
-$cboAuto.Font      = $F.Body
+$cboAuto.Font      = $script:F.Body
 $top.Controls.Add($cboAuto)
 
 $top.Controls.Add((New-VSep 234))
@@ -1389,25 +1429,25 @@ $top.Controls.Add((New-VSep 234))
 $txtFind = New-Object System.Windows.Forms.TextBox
 $txtFind.Width       = 240
 $txtFind.Location    = New-Object System.Drawing.Point(250, 10)
-$txtFind.BackColor   = $T.Bg
-$txtFind.ForeColor   = $T.Faint
+$txtFind.BackColor   = $script:T.Bg
+$txtFind.ForeColor   = $script:T.Faint
 $txtFind.BorderStyle = 'FixedSingle'
-$txtFind.Font        = $F.Body
+$txtFind.Font        = $script:F.Body
 $top.Controls.Add($txtFind)
 
 $top.Controls.Add((New-VSep 504))
 
-$lblAdmin = New-Label '' $F.Small $T.Warn 518 14 150 16
+$lblAdmin = New-Label '' $script:F.Small $script:T.Warn 518 14 150 16
 $top.Controls.Add($lblAdmin)
 
 $cboLang = New-Object System.Windows.Forms.ComboBox
 $cboLang.DropDownStyle = 'DropDownList'
 $cboLang.Width     = 58
 $cboLang.Location  = New-Object System.Drawing.Point(0, 10)
-$cboLang.BackColor = $T.Bg
-$cboLang.ForeColor = $T.Text
+$cboLang.BackColor = $script:T.Bg
+$cboLang.ForeColor = $script:T.Text
 $cboLang.FlatStyle = 'Flat'
-$cboLang.Font      = $F.Body
+$cboLang.Font      = $script:F.Body
 $cboLang.Anchor    = 'Top,Right'
 [void]$cboLang.Items.AddRange(@('EN','TR'))
 $cboLang.SelectedIndex = $(if ($script:Lang -eq 'tr') { 1 } else { 0 })
@@ -1421,18 +1461,18 @@ $btnCsv = New-DarkButton '' 62
 $btnCsv.Anchor = 'Top,Right'
 $top.Controls.Add($btnCsv)
 
-$lblStatus = New-Label '' $F.Body $T.Dim 0 13 360 18 'MiddleRight'
+$lblStatus = New-Label '' $script:F.Body $script:T.Dim 0 13 360 18 'MiddleRight'
 $lblStatus.Anchor = 'Top,Right'
 $top.Controls.Add($lblStatus)
 
 # --- action bar -------------------------------------------------------------
 $actBar = New-Object System.Windows.Forms.Panel
-$actBar.Dock = 'Bottom'; $actBar.Height = 46; $actBar.BackColor = $T.Bar
+$actBar.Dock = 'Bottom'; $actBar.Height = 46; $actBar.BackColor = $script:T.Bar
 $form.Controls.Add($actBar)
 
 $btnMsg  = New-DarkButton '' 96
 $btnDisc = New-DarkButton '' 100
-$btnOff  = New-DarkButton '' 92 $T.Warn
+$btnOff  = New-DarkButton '' 92 $script:T.Warn
 $btnKill = New-DarkButton '' 100
 $btnRst  = New-DarkButton '' 116 -Danger
 
@@ -1449,11 +1489,11 @@ $actBar.Controls.Add($btnRst)
 
 # --- footer -----------------------------------------------------------------
 $foot = New-Object System.Windows.Forms.Panel
-$foot.Dock = 'Bottom'; $foot.Height = 22; $foot.BackColor = $T.Bar
+$foot.Dock = 'Bottom'; $foot.Height = 22; $foot.BackColor = $script:T.Bar
 $form.Controls.Add($foot)
 
-$foot.Controls.Add((New-Label "belesware   v$AppVersion" $F.Small $T.Faint 12 3 200 16))
-$lblFik = New-Label 'fikired by ugur.es' $F.Small $T.Faint 0 3 170 16 'MiddleRight'
+$foot.Controls.Add((New-Label "belesware   v$AppVersion" $script:F.Small $script:T.Faint 12 3 200 16))
+$lblFik = New-Label 'fikired by ugur.es' $script:F.Small $script:T.Faint 0 3 170 16 'MiddleRight'
 $lblFik.Anchor = 'Top,Right'
 $foot.Controls.Add($lblFik)
 $script:LblFik = $lblFik
@@ -1477,6 +1517,7 @@ $foot.Add_Resize({ Layout-Bars })
 $script:Tooltip = $null
 
 function Apply-Language {
+  try {
     $btnRefresh.Text = L 'btn.refresh'
     $btnCsv.Text     = L 'btn.csv'
     $btnPerf.Text    = if ($perf.Visible) { L 'btn.hidePanel' } else { L 'btn.showPanel' }
@@ -1492,9 +1533,9 @@ function Apply-Language {
     $cboAuto.SelectedIndex = $(if ($idx -ge 0) { $idx } else { 2 })
 
     $script:FindHint = L 'find.hint'
-    if ($txtFind.ForeColor -eq $T.Faint -or $txtFind.Text.Trim() -eq '') {
+    if ($txtFind.ForeColor -eq $script:T.Faint -or $txtFind.Text.Trim() -eq '') {
         $txtFind.Text = $script:FindHint
-        $txtFind.ForeColor = $T.Faint
+        $txtFind.ForeColor = $script:T.Faint
     }
 
     $lblAdmin.Text = if ($script:IsAdmin) { '' } else { L 'app.limited' }
@@ -1519,9 +1560,9 @@ function Apply-Language {
                 MB='col.ram'; DMB='col.ramDelta'; Ms='col.query'; Note='col.note' }
     foreach ($k in $sCols.Keys) { $gridS.Columns[$k].HeaderText = L $sCols[$k] }
 
-    $pCols = @{ Pid='col.pid'; Name='col.name'; Cpu='col.cpu'; MB='col.ram';
-                DMB='col.ramDelta'; Hnd='col.handle'; DHnd='col.handleDelta';
-                Thr='col.thread'; Prot='col.protected' }
+    $pCols = @{ Pid='col.pid'; Name='col.name'; Sess='col.sessId'; SUser='col.sessUser';
+                Cpu='col.cpu'; MB='col.ram'; DMB='col.ramDelta'; Hnd='col.handle';
+                DHnd='col.handleDelta'; Thr='col.thread'; Prot='col.protected' }
     foreach ($k in $pCols.Keys) { $gridP.Columns[$k].HeaderText = L $pCols[$k] }
 
     $menuS.Items[0].Text = L 'menu.msg'
@@ -1531,6 +1572,7 @@ function Apply-Language {
     $menuS.Items[5].Text = L 'menu.shadow'
     $menuS.Items[7].Text = L 'menu.copyUser'
     $menuS.Items[8].Text = L 'menu.copyId'
+    $menuS.Items[10].Text = L 'menu.clearSel'
     $menuP.Items[0].Text = L 'menu.kill'
     $menuP.Items[2].Text = L 'menu.copyPid'
     $menuP.Items[3].Text = L 'menu.copyName'
@@ -1549,16 +1591,65 @@ function Apply-Language {
         $script:Tooltip.SetToolTip($btnRst,     (L 'tip.reset'))
     }
 
+    if (-not $script:NotifyText) { $script:NotifyText = L 'msg.notify' }
+
     if ($script:Sessions.Count) { Update-Views }
     else {
         $hdrS.Tag.Text = (L 'sess.header') -f 0, 0
         $hdrP.Tag.Text = L 'proc.none'
     }
+  } catch {
+    Write-ActionLog 'LANG' $script:Lang ("ERROR: " + $_.Exception.Message + " | " + $_.ScriptStackTrace)
+    [void][System.Windows.Forms.MessageBox]::Show(
+        ($_.Exception.Message + "`n`n" + $_.ScriptStackTrace), 'Apply-Language', 'OK', 'Error')
+  }
 }
 
 # ============================================================================
 # View refresh
 # ============================================================================
+# PowerShell's switch does not run the default branch when the input is $null,
+# it returns nothing - and assigning that to ForeColor throws
+# "Cannot convert null to type System.Drawing.Color". Both helpers below exist
+# to make every colour assignment survive an unexpected null.
+# Rows.Clear() wipes the sort the user clicked into the header, so every
+# refresh silently reordered the list. Capture it before the rebuild and
+# re-apply it afterwards.
+function Get-SortState {
+    param($Grid)
+    if ($Grid.SortedColumn) {
+        return @{ Name = $Grid.SortedColumn.Name; Dir = [string]$Grid.SortOrder }
+    }
+    return $null
+}
+
+function Restore-Sort {
+    param($Grid, $State)
+    if (-not $State) { return }
+    $col = $Grid.Columns[$State.Name]
+    if (-not $col) { return }
+    $dir = if ($State.Dir -eq 'Descending') { [System.ComponentModel.ListSortDirection]::Descending }
+           else { [System.ComponentModel.ListSortDirection]::Ascending }
+    try { $Grid.Sort($col, $dir) } catch { }
+}
+
+function Get-StateColor {
+    param($State)
+    switch ([string]$State) {
+        'Active' { return $script:T.Ok }
+        'Disc'   { return $script:T.Warn }
+        'Down'   { return $script:T.Danger }
+        'Init'   { return $script:T.Danger }
+        'Reset'  { return $script:T.Danger }
+    }
+    return $script:T.Dim
+}
+
+function Set-Fore {
+    param($Target, $Color)
+    if ($Target -and $Color -is [System.Drawing.Color]) { $Target.ForeColor = $Color }
+}
+
 function Update-Views {
     $bySession = @{}
     foreach ($p in $script:Processes) {
@@ -1569,15 +1660,20 @@ function Update-Views {
     }
     $script:BySession = $bySession
 
-    # Preserve every selected row, not just the first
+    # Preserve every selected row, not just the first. No fallback: if the user
+    # cleared the selection, it stays cleared and the process list shows
+    # everything.
     $selIds = @{}
     foreach ($r in $gridS.SelectedRows) { $selIds[[int]$r.Cells['Id'].Value] = $true }
-    if ($selIds.Count -eq 0 -and $script:SelSession -ge 0) { $selIds[[int]$script:SelSession] = $true }
+    $sortS = Get-SortState $gridS
 
     $f = $script:Filter.ToLower()
     $nAct = 0; $nDisc = 0; $nStuck = 0; $totMB = 0
     $newSessMB = @{}
 
+    # Rows.Clear/Add her satirda SelectionChanged tetikler ve Update-ProcessView
+    # yarim veriyle calisir. Toplu guncelleme boyunca bastiriyoruz.
+    $script:Rebuilding = $true
     $gridS.SuspendLayout()
     $gridS.Rows.Clear()
     foreach ($s in $script:Sessions) {
@@ -1613,37 +1709,32 @@ function Update-Views {
                              [int]$list.Count, [double]$scpu, [int]$mb, [int]$dmb,
                              [int]$s.QueryMs, $note)
         $row = $gridS.Rows[$i]
-        if ($scpu -ge 25) { $row.Cells['Cpu'].Style.ForeColor = $T.Danger }
-        elseif ($scpu -ge 10) { $row.Cells['Cpu'].Style.ForeColor = $T.Warn }
-        $row.Cells['State'].Style.ForeColor = switch ($s.State) {
-            'Active' { $T.Ok }
-            'Disc'   { $T.Warn }
-            'Down'   { $T.Danger }
-            'Init'   { $T.Danger }
-            'Reset'  { $T.Danger }
-            default  { $T.Dim }
-        }
-        if ($dmb -gt 500) { $row.Cells['DMB'].Style.ForeColor = $T.Warn }
+        if ($scpu -ge 25) { $row.Cells['Cpu'].Style.ForeColor = $script:T.Danger }
+        elseif ($scpu -ge 10) { $row.Cells['Cpu'].Style.ForeColor = $script:T.Warn }
+        Set-Fore $row.Cells['State'].Style (Get-StateColor $s.State)
+        if ($dmb -gt 500) { $row.Cells['DMB'].Style.ForeColor = $script:T.Warn }
         if ($s.QueryMs -gt $SlowQueryMs) {
-            $row.Cells['Ms'].Style.ForeColor = $T.Danger
-            $row.DefaultCellStyle.BackColor  = $T.DangerBg
+            $row.Cells['Ms'].Style.ForeColor = $script:T.Danger
+            $row.DefaultCellStyle.BackColor  = $script:T.DangerBg
         }
-        if ($note) { $row.Cells['Note'].Style.ForeColor = $T.Warn }
+        if ($note) { $row.Cells['Note'].Style.ForeColor = $script:T.Warn }
         $row.Selected = $selIds.ContainsKey([int]$s.Id)
     }
+    Restore-Sort $gridS $sortS
     $gridS.ResumeLayout()
+    $script:Rebuilding = $false
     $script:PrevSessMB = $newSessMB
 
     $script:KpiVals['active'].Text = "$nAct"
     $script:KpiVals['disc'].Text   = "$nDisc"
     $script:KpiVals['ram'].Text    = "{0:N1} GB" -f ($totMB / 1024)
     $script:KpiVals['stuck'].Text  = "$nStuck"
-    $script:KpiVals['stuck'].ForeColor = if ($nStuck -gt 0) { $T.Danger } else { $T.Faint }
+    $script:KpiVals['stuck'].ForeColor = if ($nStuck -gt 0) { $script:T.Danger } else { $script:T.Faint }
 
     $totH = 0; $totT = 0
     foreach ($p in $script:Processes) { $totH += $p.Handles; $totT += $p.Threads }
     $script:Info['hnd'].Text = "{0:N0}" -f $totH
-    $script:Info['hnd'].ForeColor = if ($totH -gt 500000) { $T.Warn } else { $T.Text }
+    $script:Info['hnd'].ForeColor = if ($totH -gt 500000) { $script:T.Warn } else { $script:T.Text }
     $script:Info['thr'].Text = "{0:N0}" -f $totT
 
     $hdrS.Tag.Text = (L 'sess.header') -f $script:Sessions.Count, $script:Processes.Count
@@ -1652,49 +1743,70 @@ function Update-Views {
 }
 
 function Update-ProcessView {
-    if ($gridS.SelectedRows.Count -eq 0) {
-        $gridP.Rows.Clear()
-        $hdrP.Tag.Text = L 'proc.none'
-        $gridP.Tag.Invalidate()
-        return
+    # No session selected -> show every process on the server, so a task can be
+    # found without walking session by session.
+    $all  = ($gridS.SelectedRows.Count -eq 0)
+    $sid  = -1
+    $user = ''
+    if (-not $all) {
+        $sid  = [int]$gridS.SelectedRows[0].Cells['Id'].Value
+        $user = [string]$gridS.SelectedRows[0].Cells['User'].Value
     }
-    $sid  = [int]$gridS.SelectedRows[0].Cells['Id'].Value
-    $user = [string]$gridS.SelectedRows[0].Cells['User'].Value
     $script:SelSession = $sid
+
+    # session and user columns only carry information in the "all" view
+    $gridP.Columns['Sess'].Visible  = $all
+    $gridP.Columns['SUser'].Visible = $all
+
+    $owner = @{}
+    foreach ($se in $script:Sessions) { $owner[[int]$se.Id] = $se.User }
+
+    $list = @()
+    if ($all) {
+        $list = @($script:Processes)
+    } elseif ($script:BySession -and $script:BySession.ContainsKey($sid)) {
+        $list = @($script:BySession[$sid])
+    }
 
     $selPid = -1
     if ($gridP.SelectedRows.Count -gt 0) { $selPid = [int]$gridP.SelectedRows[0].Cells['Pid'].Value }
+    $sortP = Get-SortState $gridP
 
     $f = $script:Filter.ToLower()
     $gridP.SuspendLayout()
     $gridP.Rows.Clear()
     $shown = 0
-    if ($script:BySession -and $script:BySession.ContainsKey($sid)) {
-        foreach ($p in ($script:BySession[$sid] | Sort-Object MB -Descending)) {
-            if ($f -and -not $p.Name.ToLower().Contains($f)) { continue }
-            $prot = $script:Protected -contains $p.Name
-            $dmb = 0; $dh = 0
-            if ($script:PrevProcs.ContainsKey($p.Id)) {
-                $dmb = $p.MB      - $script:PrevProcs[$p.Id].MB
-                $dh  = $p.Handles - $script:PrevProcs[$p.Id].Handles
-            }
-            $cpu = if ($script:CpuPct.ContainsKey($p.Id)) { [double]$script:CpuPct[$p.Id] } else { 0.0 }
-            $i = $gridP.Rows.Add([int]$p.Id, $p.Name, [double]$cpu, [int]$p.MB, [int]$dmb,
-                                 [int]$p.Handles, [int]$dh, [int]$p.Threads,
-                                 $(if ($prot) { L 'val.yes' } else { '' }))
-            $row = $gridP.Rows[$i]
-            if ($prot) { $row.DefaultCellStyle.ForeColor = $T.Faint }
-            if ($cpu -ge 25) { $row.Cells['Cpu'].Style.ForeColor = $T.Danger }
-            elseif ($cpu -ge 10) { $row.Cells['Cpu'].Style.ForeColor = $T.Warn }
-            if ($p.Handles -gt 10000) { $row.Cells['Hnd'].Style.ForeColor = $T.Warn }
-            if ($dh -gt 200)  { $row.Cells['DHnd'].Style.ForeColor = $T.Danger }
-            if ($dmb -gt 200) { $row.Cells['DMB'].Style.ForeColor  = $T.Warn }
-            if ([int]$p.Id -eq $selPid) { $row.Selected = $true }
-            $shown++
+
+    foreach ($p in ($list | Sort-Object MB -Descending)) {
+        if ($f -and -not $p.Name.ToLower().Contains($f)) { continue }
+        $prot = $script:Protected -contains $p.Name
+        $dmb = 0; $dh = 0
+        if ($script:PrevProcs.ContainsKey($p.Id)) {
+            $dmb = $p.MB      - $script:PrevProcs[$p.Id].MB
+            $dh  = $p.Handles - $script:PrevProcs[$p.Id].Handles
         }
+        $cpu = if ($script:CpuPct.ContainsKey($p.Id)) { [double]$script:CpuPct[$p.Id] } else { 0.0 }
+        $own = if ($owner.ContainsKey([int]$p.SessionId)) { $owner[[int]$p.SessionId] } else { '' }
+
+        $i = $gridP.Rows.Add([int]$p.Id, $p.Name, [int]$p.SessionId, $own,
+                             [double]$cpu, [int]$p.MB, [int]$dmb,
+                             [int]$p.Handles, [int]$dh, [int]$p.Threads,
+                             $(if ($prot) { L 'val.yes' } else { '' }))
+        $row = $gridP.Rows[$i]
+        if ($prot) { $row.DefaultCellStyle.ForeColor = $script:T.Faint }
+        if ($cpu -ge 25) { Set-Fore $row.Cells['Cpu'].Style $script:T.Danger }
+        elseif ($cpu -ge 10) { Set-Fore $row.Cells['Cpu'].Style $script:T.Warn }
+        if ($p.Handles -gt 10000) { Set-Fore $row.Cells['Hnd'].Style $script:T.Warn }
+        if ($dh -gt 200)  { Set-Fore $row.Cells['DHnd'].Style $script:T.Danger }
+        if ($dmb -gt 200) { Set-Fore $row.Cells['DMB'].Style  $script:T.Warn }
+        if ([int]$p.Id -eq $selPid) { $row.Selected = $true }
+        $shown++
     }
+
+    Restore-Sort $gridP $sortP
     $gridP.ResumeLayout()
-    $hdrP.Tag.Text = (L 'proc.header') -f $user, $sid, $shown
+    $hdrP.Tag.Text = if ($all) { (L 'proc.all') -f $shown }
+                     else { (L 'proc.header') -f $user, $sid, $shown }
     $gridP.Tag.Invalidate()
 }
 
@@ -1704,7 +1816,7 @@ function Update-ProcessView {
 function Start-Refresh {
     if ($script:Refreshing) { return }
     $script:Refreshing = $true
-    $lblStatus.ForeColor = $T.Accent
+    $lblStatus.ForeColor = $script:T.Accent
     $lblStatus.Text      = L 'status.refresh'
     $script:Prog.Stage = 'start'; $script:Prog.Current = -1
 
@@ -1726,7 +1838,7 @@ function Complete-Refresh {
             try { [void]$script:EnumJob.PS.BeginStop($null, $null) } catch { }
             $stuck = $script:Prog.Current
             $stage = $script:Prog.Stage
-            $lblStatus.ForeColor = $T.Danger
+            $lblStatus.ForeColor = $script:T.Danger
             $lblStatus.Text = if ($stuck -ge 0) {
                 (L 'status.stuck') -f $stuck, [int]$elapsed
             } else {
@@ -1737,7 +1849,7 @@ function Complete-Refresh {
             $script:EnumJob = $null
             $script:Refreshing = $false
         } elseif ($script:Prog.Current -ge 0) {
-            $lblStatus.ForeColor = $T.Dim
+            $lblStatus.ForeColor = $script:T.Dim
             $lblStatus.Text = (L 'status.refreshS') -f $script:Prog.Current, $elapsed
         }
         return
@@ -1781,7 +1893,7 @@ function Complete-Refresh {
         $script:PrevProcs = $newPrev
         $script:PrevCpu   = $newCpu
         $script:PrevCpuAt = $r.Stamp
-        $lblStatus.ForeColor = $T.Ok
+        $lblStatus.ForeColor = $script:T.Ok
         $lblStatus.Text = (L 'status.updated') -f $r.Stamp.ToString('HH:mm:ss'), $r.Ms
     }
 }
@@ -1804,7 +1916,7 @@ function Tick-Perf {
             $script:PerfJob = $null
             # Do NOT blank the values - keep the last known reading visible
             $script:Tiles['cpu'].Sub.Text = L 'perf.delayed'
-            foreach ($k in @('cpu','ram','disk','net')) { $script:Tiles[$k].Val.ForeColor = $T.Faint }
+            foreach ($k in @('cpu','ram','disk','net')) { $script:Tiles[$k].Val.ForeColor = $script:T.Faint }
         }
         return
     }
@@ -1822,16 +1934,16 @@ function Apply-Perf {
         $script:Tiles['cpu'].Val.Text = "{0}%" -f $p.Cpu
         $script:Tiles['cpu'].Sub.Text = (L 'perf.kernel') -f $p.Kernel
         Push-Hist $script:HistCpu ([double]$p.Cpu)
-        $script:Tiles['cpu'].Val.ForeColor = if ($p.Cpu -ge 90) { $T.Danger }
-                                            elseif ($p.Cpu -ge 70) { $T.Warn } else { $T.Accent }
+        $script:Tiles['cpu'].Val.ForeColor = if ($p.Cpu -ge 90) { $script:T.Danger }
+                                            elseif ($p.Cpu -ge 70) { $script:T.Warn } else { $script:T.Accent }
     }
 
     if ($null -ne $p.RamPct) {
         $script:Tiles['ram'].Val.Text = "{0} GB" -f $p.RamUsedGB
         $script:Tiles['ram'].Sub.Text = (L 'perf.free') -f $p.RamPct, [math]::Round($p.RamTotalGB - $p.RamUsedGB, 1)
         Push-Hist $script:HistRam ([double]$p.RamPct)
-        $script:Tiles['ram'].Val.ForeColor = if ($p.RamPct -ge 92) { $T.Danger }
-                                            elseif ($p.RamPct -ge 80) { $T.Warn } else { $T.Text }
+        $script:Tiles['ram'].Val.ForeColor = if ($p.RamPct -ge 92) { $script:T.Danger }
+                                            elseif ($p.RamPct -ge 80) { $script:T.Warn } else { $script:T.Text }
     }
 
     if ($null -ne $p.DiskRaw -and $script:PrevPerf -and $null -ne $script:PrevPerf.DiskRaw) {
@@ -1843,8 +1955,8 @@ function Apply-Perf {
             $script:Tiles['disk'].Val.Text = "{0} ms" -f $ms
             $script:Tiles['disk'].Sub.Text = (L 'perf.queue') -f $p.DiskQueue, $DiskWarnMs
             Push-Hist $script:HistDisk ([double]$ms)
-            $script:Tiles['disk'].Val.ForeColor = if ($ms -ge ($DiskWarnMs * 2)) { $T.Danger }
-                                                  elseif ($ms -ge $DiskWarnMs) { $T.Warn } else { $T.Ok }
+            $script:Tiles['disk'].Val.ForeColor = if ($ms -ge ($DiskWarnMs * 2)) { $script:T.Danger }
+                                                  elseif ($ms -ge $DiskWarnMs) { $script:T.Warn } else { $script:T.Ok }
         }
     }
 
@@ -1864,7 +1976,7 @@ function Apply-Perf {
     if ($p.BootTime) {
         $up = (Get-Date) - $p.BootTime
         $script:Info['up'].Text = (L 'info.uptimeFmt') -f [int]$up.TotalDays, $up.Hours
-        $script:Info['up'].ForeColor = if ($up.TotalDays -ge 60) { $T.Warn } else { $T.Text }
+        $script:Info['up'].ForeColor = if ($up.TotalDays -ge 60) { $script:T.Warn } else { $script:T.Text }
     }
 
     $script:PrevPerf = $p
@@ -1918,6 +2030,66 @@ function Confirm-Action {
     ([System.Windows.Forms.MessageBox]::Show($Body, $Title, 'YesNo', $icon, 'Button2') -eq 'Yes')
 }
 
+function Show-NotifyDialog {
+    param([string]$Header)
+
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text            = L 'msgdlg.title'
+    $d.Size            = New-Object System.Drawing.Size(580, 320)
+    $d.FormBorderStyle = 'FixedDialog'
+    $d.MaximizeBox     = $false
+    $d.MinimizeBox     = $false
+    $d.StartPosition   = 'CenterParent'
+    $d.BackColor       = $script:T.Bg
+    $d.ForeColor       = $script:T.Text
+    $d.Font            = $script:F.Body
+    try { $d.Icon = $form.Icon } catch { }
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text      = $Header
+    $lbl.Font      = $script:F.Small
+    $lbl.ForeColor = $script:T.Dim
+    $lbl.Location  = New-Object System.Drawing.Point(14, 12)
+    $lbl.Size      = New-Object System.Drawing.Size(536, 46)
+    $d.Controls.Add($lbl)
+
+    $box = New-Object System.Windows.Forms.TextBox
+    $box.Multiline   = $true
+    $box.ScrollBars  = 'Vertical'
+    $box.Location    = New-Object System.Drawing.Point(14, 62)
+    $box.Size        = New-Object System.Drawing.Size(536, 160)
+    $box.BackColor   = $script:T.Panel
+    $box.ForeColor   = $script:T.Text
+    $box.BorderStyle = 'FixedSingle'
+    $box.Font        = $script:F.Body
+    $box.Text        = $script:NotifyText
+    $d.Controls.Add($box)
+
+    $ok = New-DarkButton (L 'msgdlg.send') 120 $script:T.Accent
+    $ok.Location = New-Object System.Drawing.Point(306, 238)
+    $ca = New-DarkButton (L 'msgdlg.cancel') 120
+    $ca.Location = New-Object System.Drawing.Point(432, 238)
+    $d.Controls.AddRange(@($ok, $ca))
+
+    $script:NotifyResult = $null
+    $ok.Add_Click({
+        if ($box.Text.Trim() -eq '') {
+            [void][System.Windows.Forms.MessageBox]::Show((L 'msgdlg.empty'), (L 'msgdlg.title'), 'OK', 'Warning')
+            return
+        }
+        $script:NotifyResult = $box.Text.Trim()
+        $d.Close()
+    })
+    $ca.Add_Click({ $script:NotifyResult = $null; $d.Close() })
+
+    # Enter inserts a newline; only the button sends
+    $d.CancelButton = $ca
+    $d.Add_Shown({ $box.Focus(); $box.SelectAll() })
+    [void]$d.ShowDialog($form)
+    $d.Dispose()
+    return $script:NotifyResult
+}
+
 $btnMsg.Add_Click({
   try {
     $ss = @(Get-SelSessions); if ($ss.Count -eq 0) { return }
@@ -1927,15 +2099,13 @@ $btnMsg.Add_Click({
     $off  = @($ss | Where-Object { $_.State -ne 'Active' })
     $warn = if ($off.Count) { (L 'dlg.msgOffline') -f $off.Count } else { '' }
 
-    $body = if ($ss.Count -eq 1) {
-        ((L 'dlg.msgOne') -f $ss[0].User) + $warn
-    } else {
-        ((L 'dlg.msgMany') -f $ss.Count, (Format-SessionList $ss)) + $warn
-    }
-    if (Confirm-Action (L 'dlg.msgTitle') $body) {
+    $body = ((L 'msgdlg.label') -f $ss.Count) + $warn
+    $text = Show-NotifyDialog $body
+    if ($text) {
+        $script:NotifyText = $text
         $n = 0; $fail = @()
         foreach ($s in $ss) {
-            $rc = [Rds.Wts]::SendMessage($s.Id, (L 'msg.notifyTitle'), (L 'msg.notify'))
+            $rc = [Rds.Wts]::SendMessage($s.Id, (L 'msg.notifyTitle'), $text)
             if ($rc -eq 0) {
                 $n++
                 Write-ActionLog 'MSG' "$($s.User) (session $($s.Id))" 'ok'
@@ -1946,13 +2116,13 @@ $btnMsg.Add_Click({
         }
         if ($fail.Count) {
             $hint = if ($fail -match 'error 5') { L 'err.accessDenied' } else { '' }
-            $lblStatus.ForeColor = $T.Danger
+            $lblStatus.ForeColor = $script:T.Danger
             $lblStatus.Text = (L 'status.msgFail') -f $n, $ss.Count, $fail.Count
             [void][System.Windows.Forms.MessageBox]::Show(
                 ((L 'err.failedList') -f ($fail -join "`n"), $hint),
                 (L 'err.msgTitle'), 'OK', 'Warning')
         } else {
-            $lblStatus.ForeColor = $T.Ok
+            $lblStatus.ForeColor = $script:T.Ok
             $lblStatus.Text = (L 'status.msgSent') -f $n, $ss.Count
         }
     }
@@ -1975,7 +2145,7 @@ $btnDisc.Add_Click({
             $ok = [Rds.Wts]::Disconnect($s.Id)
             Write-ActionLog 'DISCONNECT' "$($s.User) (session $($s.Id))" $ok
         }
-        $lblStatus.ForeColor = $T.Ok
+        $lblStatus.ForeColor = $script:T.Ok
         $lblStatus.Text = (L 'status.disc') -f $ss.Count
         Start-Refresh
     }
@@ -1998,7 +2168,7 @@ $btnOff.Add_Click({
             $ok = [Rds.Wts]::Logoff($s.Id)
             Write-ActionLog 'LOGOFF' "$($s.User) (session $($s.Id))" $ok
         }
-        $lblStatus.ForeColor = $T.Warn
+        $lblStatus.ForeColor = $script:T.Warn
         $lblStatus.Text = (L 'status.logoff') -f $ss.Count
         Start-Refresh
     }
@@ -2020,7 +2190,7 @@ $btnRst.Add_Click({
     try {
         Start-Process -FilePath 'rwinsta.exe' -ArgumentList "$($s.Id)" -WindowStyle Hidden
         Write-ActionLog 'RWINSTA' "$($s.User) (session $($s.Id))" 'sent'
-        $lblStatus.ForeColor = $T.Danger
+        $lblStatus.ForeColor = $script:T.Danger
         $lblStatus.Text = (L 'status.reset') -f $s.Id
     } catch {
         Write-ActionLog 'RWINSTA' "session $($s.Id)" ("ERROR: " + $_.Exception.Message)
@@ -2034,10 +2204,11 @@ $btnKill.Add_Click({
         [void][System.Windows.Forms.MessageBox]::Show((L 'dlg.noProcSel'), (L 'dlg.noSelTitle'), 'OK', 'Information')
         return
     }
-    $s = Get-SelSession; if (-not $s) { return }
-    $r    = $gridP.SelectedRows[0]
-    $tpid = [int]$r.Cells['Pid'].Value
-    $name = [string]$r.Cells['Name'].Value
+    $r     = $gridP.SelectedRows[0]
+    $tpid  = [int]$r.Cells['Pid'].Value
+    $name  = [string]$r.Cells['Name'].Value
+    $tsid  = [int]$r.Cells['Sess'].Value
+    $tuser = [string]$r.Cells['SUser'].Value
 
     if ($script:Protected -contains $name) {
         [void][System.Windows.Forms.MessageBox]::Show(
@@ -2045,11 +2216,11 @@ $btnKill.Add_Click({
         return
     }
 
-    if (Confirm-Action (L 'dlg.killTitle') ((L 'dlg.killBody') -f $name, $tpid, $s.Id, $s.User)) {
+    if (Confirm-Action (L 'dlg.killTitle') ((L 'dlg.killBody') -f $name, $tpid, $tsid, $tuser)) {
         try {
             Stop-Process -Id $tpid -Force -ErrorAction Stop
-            Write-ActionLog 'KILL' "$name pid=$tpid session=$($s.Id) user=$($s.User)" 'ok'
-            $lblStatus.ForeColor = $T.Ok
+            Write-ActionLog 'KILL' "$name pid=$tpid session=$tsid user=$tuser" 'ok'
+            $lblStatus.ForeColor = $script:T.Ok
             $lblStatus.Text = (L 'status.killed') -f $name, $tpid
         } catch {
             Write-ActionLog 'KILL' "$name pid=$tpid" ("ERROR: " + $_.Exception.Message)
@@ -2075,7 +2246,7 @@ $btnCsv.Add_Click({
             }
         }
         $rows | Export-Csv -LiteralPath $dlg.FileName -NoTypeInformation -Encoding UTF8
-        $lblStatus.ForeColor = $T.Ok
+        $lblStatus.ForeColor = $script:T.Ok
         $lblStatus.Text = L 'status.csv'
         Write-ActionLog 'EXPORT' $dlg.FileName 'ok'
     } catch {
@@ -2085,9 +2256,9 @@ $btnCsv.Add_Click({
 
 # --- context menus ----------------------------------------------------------
 $menuS = New-Object System.Windows.Forms.ContextMenuStrip
-$menuS.BackColor = $T.Panel
-$menuS.ForeColor = $T.Text
-$menuS.Font      = $F.Body
+$menuS.BackColor = $script:T.Panel
+$menuS.ForeColor = $script:T.Text
+$menuS.Font      = $script:F.Body
 $menuS.ShowImageMargin = $false
 try { $menuS.Renderer = New-Object System.Windows.Forms.ToolStripProfessionalRenderer((New-Object RdsUi.DarkMenuColors)) } catch { }
 
@@ -2113,6 +2284,8 @@ try { $menuS.Renderer = New-Object System.Windows.Forms.ToolStripProfessionalRen
 [void]$menuS.Items.Add('').Add_Click({
     if ($gridS.SelectedRows.Count) { [System.Windows.Forms.Clipboard]::SetText([string]$gridS.SelectedRows[0].Cells['Id'].Value) }
 })
+[void]$menuS.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+[void]$menuS.Items.Add('').Add_Click({ $gridS.ClearSelection() })
 $gridS.ContextMenuStrip = $menuS
 
 $gridS.Add_CellMouseDown({
@@ -2126,9 +2299,9 @@ $gridS.Add_CellMouseDown({
 })
 
 $menuP = New-Object System.Windows.Forms.ContextMenuStrip
-$menuP.BackColor = $T.Panel
-$menuP.ForeColor = $T.Text
-$menuP.Font      = $F.Body
+$menuP.BackColor = $script:T.Panel
+$menuP.ForeColor = $script:T.Text
+$menuP.Font      = $script:F.Body
 $menuP.ShowImageMargin = $false
 try { $menuP.Renderer = New-Object System.Windows.Forms.ToolStripProfessionalRenderer((New-Object RdsUi.DarkMenuColors)) } catch { }
 
@@ -2160,32 +2333,32 @@ $script:Tooltip   = $tip
 $tip.Add_Popup({
     param($s, $e)
     $txt = $s.GetToolTip($e.AssociatedControl)
-    $sz  = [System.Windows.Forms.TextRenderer]::MeasureText($txt, $F.Body)
+    $sz  = [System.Windows.Forms.TextRenderer]::MeasureText($txt, $script:F.Body)
     $e.ToolTipSize = New-Object System.Drawing.Size(($sz.Width + 16), ($sz.Height + 12))
 })
 
 $tip.Add_Draw({
     param($s, $e)
-    $bg = New-Object System.Drawing.SolidBrush($T.Panel)
-    $pn = New-Object System.Drawing.Pen($T.Border)
+    $bg = New-Object System.Drawing.SolidBrush($script:T.Panel)
+    $pn = New-Object System.Drawing.Pen($script:T.Border)
     $e.Graphics.FillRectangle($bg, $e.Bounds)
     $e.Graphics.DrawRectangle($pn, 0, 0, ($e.Bounds.Width - 1), ($e.Bounds.Height - 1))
-    [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $e.ToolTipText, $F.Body,
-        (New-Object System.Drawing.Point(8, 6)), $T.Text)
+    [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $e.ToolTipText, $script:F.Body,
+        (New-Object System.Drawing.Point(8, 6)), $script:T.Text)
     $bg.Dispose(); $pn.Dispose()
 })
 
 # ============================================================================
 # Events and timers
 # ============================================================================
-$gridS.Add_SelectionChanged({ Update-ProcessView })
+$gridS.Add_SelectionChanged({ if (-not $script:Rebuilding) { Update-ProcessView } })
 $btnRefresh.Add_Click({ Start-Refresh })
 
 $txtFind.Add_Enter({
-    if ($this.Text -eq $script:FindHint) { $this.Text = ''; $this.ForeColor = $T.Text }
+    if ($this.Text -eq $script:FindHint) { $this.Text = ''; $this.ForeColor = $script:T.Text }
 })
 $txtFind.Add_Leave({
-    if ($this.Text.Trim() -eq '') { $this.Text = $script:FindHint; $this.ForeColor = $T.Faint }
+    if ($this.Text.Trim() -eq '') { $this.Text = $script:FindHint; $this.ForeColor = $script:T.Faint }
 })
 $txtFind.Add_TextChanged({
     $t = $txtFind.Text
@@ -2236,7 +2409,8 @@ $cboLang.Add_SelectedIndexChanged({
 $form.Add_KeyDown({
     if ($_.KeyCode -eq 'F5') { Start-Refresh; $_.Handled = $true }
     if ($_.Control -and $_.KeyCode -eq 'F') { $txtFind.Focus(); $txtFind.SelectAll(); $_.Handled = $true }
-    if ($_.Control -and $_.KeyCode -eq 'A' -and $gridS.Focused) { $gridS.SelectAll(); $_.Handled = $true }
+    if ($_.Control -and $_.Shift -and $_.KeyCode -eq 'A') { $gridS.ClearSelection(); $_.Handled = $true }
+    elseif ($_.Control -and $_.KeyCode -eq 'A' -and $gridS.Focused) { $gridS.SelectAll(); $_.Handled = $true }
     if ($_.KeyCode -eq 'Delete' -and $gridP.Focused) { $btnKill.PerformClick(); $_.Handled = $true }
     if ($_.KeyCode -eq 'Escape') { $form.Close() }
 })

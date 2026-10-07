@@ -3,6 +3,59 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] - 2026-10-07
+
+### Added
+- With no session selected the process list now shows **every process on the
+  server**, with session id and user columns, so a task can be found and ended
+  without walking session by session. Combined with the search box this is the
+  fastest way to locate a runaway process.
+- Ending a task no longer requires a session to be selected; the target session
+  and user are read from the process row itself and shown in the confirmation.
+- Clear the session selection with Ctrl+Shift+A or the right-click menu.
+
+### Fixed
+- Sorting the session list by a column header was lost a few seconds later.
+  `Rows.Clear()` discards the sort, and every refresh rebuilds the list, so the
+  order silently reverted. The sorted column and direction are now captured
+  before the rebuild and re-applied afterwards, for both lists.
+- The selection used to come back on the next refresh even after being cleared,
+  because the previously selected session was restored as a fallback.
+
+## [1.3.3] - 2026-09-15
+
+### Fixed
+- Switching the interface language threw "Cannot convert null to type
+  System.Drawing.Color" and left the UI half translated. `Apply-Language` was
+  aborting partway through, so buttons were translated but column headers and
+  the summary strip were not.
+  - The state colour was picked with a `switch` statement. PowerShell does not
+    run the `default` branch when the input is `$null`; the statement returns
+    nothing and assigning that to `ForeColor` throws. Replaced with a helper
+    that always returns a colour.
+  - `$T` and `$F` (theme and fonts) are now explicitly `$script:` scoped.
+  - `Apply-Language` catches its own errors, so a single bad step can no longer
+    leave the interface in a mixed state.
+
+### Added
+- A global WinForms exception handler. Instead of the raw .NET crash dialog,
+  errors now show a readable message and the full stack trace is appended to
+  `RdpSesinMenicir.log`.
+
+## [1.3.2] - 2026-09-15
+
+### Added
+- The notification text is now typed in a dialog before sending, instead of
+  being a fixed string in the script. The last message is remembered for the
+  session and seeded from the language file on first use.
+
+### Fixed
+- Searching threw "Cannot convert null to type System.Drawing.Color".
+  `Rows.Clear()` and every `Rows.Add()` raise `SelectionChanged`, so
+  `Update-ProcessView` ran in the middle of a rebuild against half-written
+  state. The event is now suppressed while the session list is being rebuilt,
+  which also removes a lot of redundant work per refresh.
+
 ## [1.3.1] - 2026-09-03
 
 ### Fixed
